@@ -1,0 +1,622 @@
+// ============================================================
+//  FOROhub — API REST con Spring Boot
+//  Archivo de referencia para principiantes
+//  Estructura: un bloque por capa, con explicaciones simples
+// ============================================================
+
+
+// ─────────────────────────────────────────
+// 1. ARCHIVO PRINCIPAL
+// ─────────────────────────────────────────
+// Archivo: ForoHubApplication.java
+// Este es el punto de entrada de toda la app.
+
+package com.alura.foroHub;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication  // Le dice a Spring: "esto es una app Spring Boot, configúrate solo"
+public class ForoHubApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(ForoHubApplication.class, args);
+    }
+}
+
+
+// ─────────────────────────────────────────
+// 2. MODELO (la tabla en la base de datos)
+// ─────────────────────────────────────────
+// Archivo: model/Topico.java
+// Cada campo de esta clase = una columna en la tabla "topicos"
+
+package com.alura.foroHub.model;
+
+import jakarta.persistence.*;
+import lombok.*;
+import java.time.LocalDateTime;
+
+@Entity               // Le dice a JPA: "esta clase es una tabla en la BD"
+@Table(name = "topicos")
+@Getter @Setter
+@NoArgsConstructor
+public class Topico {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY) // ID autoincremental
+    private Long id;
+
+    private String titulo;
+    private String mensaje;
+    private LocalDateTime fechaCreacion;
+
+    @Enumerated(EnumType.STRING)
+    private StatusTopico status;
+
+    private String autor;
+    private String curso;
+
+    @PrePersist // Se ejecuta automáticamente antes de guardar en BD
+    public void prePersist() {
+        this.fechaCreacion = LocalDateTime.now();
+        this.status = StatusTopico.ABIERTO;
+    }
+
+    // Método para actualizar solo los campos que llegaron en la solicitud
+    public void actualizar(String titulo, String mensaje, String autor, String curso, StatusTopico status) {
+        if (titulo  != null) this.titulo  = titulo;
+        if (mensaje != null) this.mensaje = mensaje;
+        if (autor   != null) this.autor   = autor;
+        if (curso   != null) this.curso   = curso;
+        if (status  != null) this.status  = status;
+    }
+}
+
+
+// ─────────────────────────────────────────
+// Archivo: model/StatusTopico.java
+// Un "enum" es una lista fija de valores posibles
+
+package com.alura.foroHub.model;
+
+public enum StatusTopico {
+    ABIERTO, CERRADO, RESUELTO, NO_RESPONDIDO
+}
+
+
+// ─────────────────────────────────────────
+// Archivo: model/Usuario.java
+// Tabla de usuarios para el login
+
+package com.alura.foroHub.model;
+
+import jakarta.persistence.*;
+import lombok.*;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+import java.util.Collection;
+import java.util.List;
+
+@Entity
+@Table(name = "usuarios")
+@Getter @Setter
+@NoArgsConstructor
+// UserDetails es una interfaz de Spring Security
+// que obliga a implementar métodos como getUsername() y getPassword()
+public class Usuario implements UserDetails {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(unique = true)
+    private String login;
+
+    private String clave;
+
+    @Override public String getUsername()  { return login; }
+    @Override public String getPassword()  { return clave; }
+
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        return List.of(new SimpleGrantedAuthority("ROLE_USER"));
+    }
+
+    @Override public boolean isAccountNonExpired()     { return true; }
+    @Override public boolean isAccountNonLocked()      { return true; }
+    @Override public boolean isCredentialsNonExpired() { return true; }
+    @Override public boolean isEnabled()               { return true; }
+}
+
+
+// ─────────────────────────────────────────
+// 3. REPOSITORIOS (acceso a la BD)
+// ─────────────────────────────────────────
+// Archivo: repository/TopicoRepository.java
+// JpaRepository ya trae los métodos básicos: save, findById, findAll, deleteById
+// Solo necesitas agregar consultas especiales
+
+package com.alura.foroHub.repository;
+
+import com.alura.foroHub.model.Topico;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface TopicoRepository extends JpaRepository<Topico, Long> {
+    // Spring genera el SQL automáticamente a partir del nombre del método
+    boolean existsByTituloAndMensaje(String titulo, String mensaje);
+}
+
+
+// Archivo: repository/UsuarioRepository.java
+package com.alura.foroHub.repository;
+
+import com.alura.foroHub.model.Usuario;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.security.core.userdetails.UserDetails;
+
+public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
+    UserDetails findByLogin(String login);
+}
+
+
+// ─────────────────────────────────────────
+// 4. DTOs (los datos que entran y salen)
+// ─────────────────────────────────────────
+// Archivo: dto/TopicoDTO.java
+// Un "record" es como una clase pero más corta, ideal para transportar datos
+
+package com.alura.foroHub.dto;
+
+import com.alura.foroHub.model.*;
+import jakarta.validation.constraints.NotBlank;
+import java.time.LocalDateTime;
+
+public class TopicoDTO {
+
+    // Lo que el cliente ENVÍA al crear un tópico
+    public record RegistroTopicoRequest(
+        @NotBlank String titulo,   // @NotBlank valida que no llegue vacío
+        @NotBlank String mensaje,
+        @NotBlank String autor,
+        @NotBlank String curso
+    ) {}
+
+    // Lo que el cliente ENVÍA al actualizar (todos opcionales)
+    public record ActualizarTopicoRequest(
+        String titulo, String mensaje,
+        String autor,  String curso,
+        StatusTopico status
+    ) {}
+
+    // Lo que la API DEVUELVE con todos los datos del tópico
+    public record TopicoResponse(
+        Long id, String titulo, String mensaje,
+        LocalDateTime fechaCreacion, StatusTopico status,
+        String autor, String curso
+    ) {
+        public TopicoResponse(Topico t) {
+            this(t.getId(), t.getTitulo(), t.getMensaje(),
+                 t.getFechaCreacion(), t.getStatus(),
+                 t.getAutor(), t.getCurso());
+        }
+    }
+}
+
+
+// Archivo: dto/AuthDTO.java
+package com.alura.foroHub.dto;
+
+import jakarta.validation.constraints.NotBlank;
+
+public class AuthDTO {
+    public record LoginRequest(@NotBlank String login, @NotBlank String clave) {}
+    public record TokenResponse(String token) {}
+}
+
+
+// ─────────────────────────────────────────
+// 5. SERVICIOS (la lógica del negocio)
+// ─────────────────────────────────────────
+// Archivo: service/TopicoService.java
+// Aquí van las reglas: validar duplicados, verificar que el ID exista, etc.
+
+package com.alura.foroHub.service;
+
+import com.alura.foroHub.dto.TopicoDTO.*;
+import com.alura.foroHub.model.Topico;
+import com.alura.foroHub.repository.TopicoRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.*;
+import org.springframework.stereotype.Service;
+
+@Service  // Le dice a Spring que esta clase es un servicio y puede ser inyectada
+public class TopicoService {
+
+    @Autowired  // Spring inyecta automáticamente el repositorio aquí
+    private TopicoRepository topicoRepository;
+
+    public TopicoResponse registrar(RegistroTopicoRequest datos) {
+        // Regla: no permitir tópicos duplicados
+        if (topicoRepository.existsByTituloAndMensaje(datos.titulo(), datos.mensaje())) {
+            throw new IllegalArgumentException("Ya existe un tópico con ese título y mensaje.");
+        }
+        Topico topico = new Topico();
+        topico.setTitulo(datos.titulo());
+        topico.setMensaje(datos.mensaje());
+        topico.setAutor(datos.autor());
+        topico.setCurso(datos.curso());
+        topicoRepository.save(topico);
+        return new TopicoResponse(topico);
+    }
+
+    public Page<TopicoResponse> listar(Pageable pageable) {
+        return topicoRepository.findAll(pageable).map(TopicoResponse::new);
+    }
+
+    public TopicoResponse detalle(Long id) {
+        Topico topico = topicoRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("Tópico no encontrado: " + id));
+        return new TopicoResponse(topico);
+    }
+
+    public TopicoResponse actualizar(Long id, ActualizarTopicoRequest datos) {
+        Topico topico = topicoRepository.findById(id)
+            .orElseThrow(() -> new IllegalArgumentException("Tópico no encontrado: " + id));
+        topico.actualizar(datos.titulo(), datos.mensaje(), datos.autor(), datos.curso(), datos.status());
+        return new TopicoResponse(topico);
+    }
+
+    public void eliminar(Long id) {
+        if (!topicoRepository.existsById(id)) {
+            throw new IllegalArgumentException("Tópico no encontrado: " + id);
+        }
+        topicoRepository.deleteById(id);
+    }
+}
+
+
+// Archivo: service/AutenticacionService.java
+// Spring Security llama a este servicio para buscar al usuario en la BD
+package com.alura.foroHub.service;
+
+import com.alura.foroHub.repository.UsuarioRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.userdetails.*;
+import org.springframework.stereotype.Service;
+
+@Service
+public class AutenticacionService implements UserDetailsService {
+
+    @Autowired
+    private UsuarioRepository usuarioRepository;
+
+    @Override
+    public UserDetails loadUserByUsername(String login) throws UsernameNotFoundException {
+        UserDetails usuario = usuarioRepository.findByLogin(login);
+        if (usuario == null) throw new UsernameNotFoundException("Usuario no encontrado");
+        return usuario;
+    }
+}
+
+
+// ─────────────────────────────────────────
+// 6. SEGURIDAD (JWT + filtro)
+// ─────────────────────────────────────────
+// Archivo: security/TokenService.java
+// Genera y valida tokens JWT
+
+package com.alura.foroHub.security;
+
+import com.alura.foroHub.model.Usuario;
+import com.auth0.jwt.*;
+import com.auth0.jwt.algorithms.Algorithm;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import java.time.*;
+
+@Service
+public class TokenService {
+
+    @Value("${api.security.token.secret}")  // Lee el valor desde application.properties
+    private String secret;
+
+    public String generarToken(Usuario usuario) {
+        return JWT.create()
+            .withIssuer("ForoHub")
+            .withSubject(usuario.getLogin())
+            .withExpiresAt(LocalDateTime.now().plusHours(2).toInstant(ZoneOffset.of("-06:00")))
+            .sign(Algorithm.HMAC256(secret));
+    }
+
+    public String getLoginDesdeToken(String token) {
+        return JWT.require(Algorithm.HMAC256(secret))
+            .withIssuer("ForoHub")
+            .build()
+            .verify(token)
+            .getSubject();
+    }
+}
+
+
+// Archivo: security/SecurityFilter.java
+// Se ejecuta en CADA solicitud para validar el token antes de continuar
+
+package com.alura.foroHub.security;
+
+import com.alura.foroHub.repository.UsuarioRepository;
+import jakarta.servlet.*;
+import jakarta.servlet.http.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+import java.io.IOException;
+
+@Component
+public class SecurityFilter extends OncePerRequestFilter {
+
+    @Autowired private TokenService tokenService;
+    @Autowired private UsuarioRepository usuarioRepository;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
+            throws ServletException, IOException {
+
+        String header = req.getHeader("Authorization");
+
+        if (header != null && header.startsWith("Bearer ")) {
+            String token   = header.replace("Bearer ", "");
+            String login   = tokenService.getLoginDesdeToken(token);
+            var    usuario = usuarioRepository.findByLogin(login);
+            // Registra al usuario como autenticado en el contexto de seguridad
+            var auth = new UsernamePasswordAuthenticationToken(usuario, null, usuario.getAuthorities());
+            SecurityContextHolder.getContext().setAuthentication(auth);
+        }
+
+        chain.doFilter(req, res); // Continúa con la solicitud
+    }
+}
+
+
+// Archivo: security/SecurityConfigurations.java
+// Define qué rutas son públicas y cuáles requieren token
+
+package com.alura.foroHub.security;
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.*;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.*;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.*;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.*;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfigurations {
+
+    @Autowired private SecurityFilter securityFilter;
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        return http
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers(HttpMethod.POST, "/login").permitAll() // login es público
+                .anyRequest().authenticated()                           // todo lo demás requiere token
+            )
+            .addFilterBefore(securityFilter, UsernamePasswordAuthenticationFilter.class)
+            .build();
+    }
+
+    @Bean
+    public AuthenticationManager authManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(); // Hashea las contraseñas de forma segura
+    }
+}
+
+
+// ─────────────────────────────────────────
+// 7. CONTROLADORES (los endpoints)
+// ─────────────────────────────────────────
+// Archivo: controller/AuthController.java
+// Recibe usuario y contraseña, devuelve un token JWT
+
+package com.alura.foroHub.controller;
+
+import com.alura.foroHub.dto.AuthDTO.*;
+import com.alura.foroHub.model.Usuario;
+import com.alura.foroHub.security.TokenService;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.*;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/login")
+public class AuthController {
+
+    @Autowired private AuthenticationManager authManager;
+    @Autowired private TokenService tokenService;
+
+    @PostMapping
+    public ResponseEntity<TokenResponse> login(@RequestBody @Valid LoginRequest datos) {
+        var auth  = new UsernamePasswordAuthenticationToken(datos.login(), datos.clave());
+        var autenticacion = authManager.authenticate(auth);
+        var token = tokenService.generarToken((Usuario) autenticacion.getPrincipal());
+        return ResponseEntity.ok(new TokenResponse(token));
+    }
+}
+
+
+// Archivo: controller/TopicoController.java
+// Los 5 endpoints CRUD de tópicos
+
+package com.alura.foroHub.controller;
+
+import com.alura.foroHub.dto.TopicoDTO.*;
+import com.alura.foroHub.service.TopicoService;
+import jakarta.transaction.Transactional;
+import jakarta.validation.Valid;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.*;
+import org.springframework.data.web.PageableDefault;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.util.UriComponentsBuilder;
+
+@RestController
+@RequestMapping("/topicos")
+public class TopicoController {
+
+    @Autowired private TopicoService topicoService;
+
+    // POST /topicos — crear tópico
+    @PostMapping
+    @Transactional
+    public ResponseEntity<TopicoResponse> registrar(
+            @RequestBody @Valid RegistroTopicoRequest datos,
+            UriComponentsBuilder uri) {
+        var response = topicoService.registrar(datos);
+        var location = uri.path("/topicos/{id}").buildAndExpand(response.id()).toUri();
+        return ResponseEntity.created(location).body(response); // 201 Created
+    }
+
+    // GET /topicos — listar todos (con paginación)
+    @GetMapping
+    public ResponseEntity<Page<TopicoResponse>> listar(
+            @PageableDefault(size = 10, sort = "fechaCreacion") Pageable pageable) {
+        return ResponseEntity.ok(topicoService.listar(pageable));
+    }
+
+    // GET /topicos/{id} — ver un tópico específico
+    @GetMapping("/{id}")
+    public ResponseEntity<TopicoResponse> detalle(@PathVariable Long id) {
+        return ResponseEntity.ok(topicoService.detalle(id));
+    }
+
+    // PUT /topicos/{id} — actualizar un tópico
+    @PutMapping("/{id}")
+    @Transactional
+    public ResponseEntity<TopicoResponse> actualizar(
+            @PathVariable Long id,
+            @RequestBody @Valid ActualizarTopicoRequest datos) {
+        return ResponseEntity.ok(topicoService.actualizar(id, datos));
+    }
+
+    // DELETE /topicos/{id} — eliminar un tópico
+    @DeleteMapping("/{id}")
+    @Transactional
+    public ResponseEntity<Void> eliminar(@PathVariable Long id) {
+        topicoService.eliminar(id);
+        return ResponseEntity.noContent().build(); // 204 No Content
+    }
+}
+
+
+// ─────────────────────────────────────────
+// 8. MANEJO DE ERRORES
+// ─────────────────────────────────────────
+// Archivo: infra/ManejadorDeErrores.java
+// Captura excepciones y devuelve respuestas HTTP legibles
+
+package com.alura.foroHub.infra;
+
+import org.springframework.http.ResponseEntity;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.*;
+import java.util.List;
+
+@RestControllerAdvice  // Intercepta errores de todos los controladores
+public class ManejadorDeErrores {
+
+    // Error 400 por campos inválidos (@NotBlank, etc.)
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<List<ErrorValidacion>> manejarError400(MethodArgumentNotValidException e) {
+        var errores = e.getFieldErrors().stream().map(ErrorValidacion::new).toList();
+        return ResponseEntity.badRequest().body(errores);
+    }
+
+    // Error 400 por reglas de negocio (ej: tópico duplicado)
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<String> manejarErrorNegocio(IllegalArgumentException e) {
+        return ResponseEntity.badRequest().body(e.getMessage());
+    }
+
+    private record ErrorValidacion(String campo, String mensaje) {
+        ErrorValidacion(FieldError e) { this(e.getField(), e.getDefaultMessage()); }
+    }
+}
+
+
+// ─────────────────────────────────────────
+// 9. CONFIGURACIÓN
+// ─────────────────────────────────────────
+/*  Archivo: resources/application.properties
+
+    spring.datasource.url=jdbc:mysql://localhost:3306/foroHub?createDatabaseIfNotExist=true
+    spring.datasource.username=root
+    spring.datasource.password=TU_PASSWORD_AQUI
+    spring.jpa.show-sql=true
+    api.security.token.secret=foroHub-secret-key-2024
+*/
+
+
+// ─────────────────────────────────────────
+// 10. MIGRACIONES FLYWAY (SQL)
+// ─────────────────────────────────────────
+/*  Archivo: resources/db/migration/V1__create-table-topicos.sql
+
+    CREATE TABLE topicos (
+        id             BIGINT       NOT NULL AUTO_INCREMENT,
+        titulo         VARCHAR(255) NOT NULL,
+        mensaje        TEXT         NOT NULL,
+        fecha_creacion DATETIME     NOT NULL,
+        status         VARCHAR(50)  NOT NULL DEFAULT 'ABIERTO',
+        autor          VARCHAR(255) NOT NULL,
+        curso          VARCHAR(255) NOT NULL,
+        PRIMARY KEY (id)
+    );
+*/
+
+/*  Archivo: resources/db/migration/V2__create-table-usuarios.sql
+
+    CREATE TABLE usuarios (
+        id    BIGINT       NOT NULL AUTO_INCREMENT,
+        login VARCHAR(100) NOT NULL UNIQUE,
+        clave VARCHAR(255) NOT NULL,
+        PRIMARY KEY (id)
+    );
+*/
+
+
+// ─────────────────────────────────────────
+// RESUMEN DE ENDPOINTS
+// ─────────────────────────────────────────
+/*
+    POST   /login          → Obtener token JWT (público)
+
+    POST   /topicos        → Crear tópico       (requiere token)
+    GET    /topicos        → Listar tópicos     (requiere token)
+    GET    /topicos/{id}   → Ver un tópico      (requiere token)
+    PUT    /topicos/{id}   → Actualizar tópico  (requiere token)
+    DELETE /topicos/{id}   → Eliminar tópico    (requiere token)
+
+    Para usar el token: agregar en el header de la solicitud:
+    Authorization: Bearer <token>
+*/
